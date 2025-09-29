@@ -150,6 +150,20 @@ func (m *connIDGenerator) issueNewConnID() error {
 	return nil
 }
 
+func (m *connIDGenerator) setPreferredAddressConnID(preferredAddress *wire.PreferredAddress) (*wire.PreferredAddress, error) {
+	connID, err := m.generator.GenerateConnectionID()
+	if err != nil {
+		return nil, err
+	}
+	// TODO does the sequence number matter here?
+	m.activeSrcConnIDs[m.highestSeq+1] = connID
+	m.connRunners.AddConnectionID(connID)
+	preferredAddress.ConnectionID = connID
+	preferredAddress.StatelessResetToken = m.statelessResetter.GetStatelessResetToken(connID)
+	m.highestSeq++
+	return preferredAddress, nil
+}
+
 func (m *connIDGenerator) SetHandshakeComplete(connIDExpiry monotime.Time) {
 	if m.initialClientDestConnID != nil {
 		m.queueConnIDForRetiring(*m.initialClientDestConnID, connIDExpiry)

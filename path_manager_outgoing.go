@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"net"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -29,6 +30,7 @@ type Path struct {
 	pathManager *pathManagerOutgoing
 	tr          *Transport
 	initialRTT  time.Duration
+	remoteAddr  net.Addr
 
 	enablePath func()
 	validated  atomic.Bool
@@ -106,6 +108,7 @@ func (p *Path) Close() error {
 type pathOutgoing struct {
 	pathChallenges [][8]byte // length is implicitly limited by exponential backoff
 	tr             *Transport
+	remoteAddr     net.Addr
 	isValidated    bool
 	probeSent      chan struct{} // receives when a PATH_CHALLENGE is sent
 	validated      chan struct{} // closed when the path the corresponding PATH_RESPONSE is received
@@ -161,6 +164,7 @@ func (pm *pathManagerOutgoing) addPath(p *Path, enablePath func()) *pathOutgoing
 		probeSent:  make(chan struct{}, 1),
 		validated:  make(chan struct{}),
 		enablePath: enablePath,
+		remoteAddr: p.remoteAddr,
 	}
 	pm.paths[p.id] = path
 	return path
@@ -215,7 +219,7 @@ func (pm *pathManagerOutgoing) switchToPath(id pathID) error {
 	return nil
 }
 
-func (pm *pathManagerOutgoing) NewPath(t *Transport, initialRTT time.Duration, enablePath func()) *Path {
+func (pm *pathManagerOutgoing) NewPath(t *Transport, initialRTT time.Duration, remoteAddr net.Addr, enablePath func()) *Path {
 	pm.mx.Lock()
 	defer pm.mx.Unlock()
 
@@ -227,11 +231,12 @@ func (pm *pathManagerOutgoing) NewPath(t *Transport, initialRTT time.Duration, e
 		tr:          t,
 		enablePath:  enablePath,
 		initialRTT:  initialRTT,
+		remoteAddr:  remoteAddr,
 		abandon:     make(chan struct{}),
 	}
 }
 
-func (pm *pathManagerOutgoing) NextPathToProbe() (_ protocol.ConnectionID, _ ackhandler.Frame, _ *Transport, hasPath bool) {
+func (pm *pathManagerOutgoing) NextPathToProbe() (_ protocol.ConnectionID, _ ackhandler.Frame, remote net.Addr, _ *Transport, hasPath bool) {
 	pm.mx.Lock()
 	defer pm.mx.Unlock()
 
@@ -248,12 +253,12 @@ func (pm *pathManagerOutgoing) NextPathToProbe() (_ protocol.ConnectionID, _ ack
 		pm.pathsToProbe = pm.pathsToProbe[1:]
 	}
 	if id == invalidPathID {
-		return protocol.ConnectionID{}, ackhandler.Frame{}, nil, false
+		return protocol.ConnectionID{}, ackhandler.Frame{}, nil, nil, false
 	}
 
 	connID, ok := pm.getConnID(id)
 	if !ok {
-		return protocol.ConnectionID{}, ackhandler.Frame{}, nil, false
+		return protocol.ConnectionID{}, ackhandler.Frame{}, nil, nil, false
 	}
 
 	var b [8]byte
@@ -270,9 +275,10 @@ func (pm *pathManagerOutgoing) NextPathToProbe() (_ protocol.ConnectionID, _ ack
 		Frame:   &wire.PathChallengeFrame{Data: b},
 		Handler: (*pathManagerOutgoingAckHandler)(pm),
 	}
-	return connID, frame, p.tr, true
+	return connID, frame, p.remoteAddr, p.tr, true
 }
 
+// TODO: are we checking that there is a large enough MTU?
 func (pm *pathManagerOutgoing) HandlePathResponseFrame(f *wire.PathResponseFrame) {
 	pm.mx.Lock()
 	defer pm.mx.Unlock()
@@ -291,16 +297,16 @@ func (pm *pathManagerOutgoing) HandlePathResponseFrame(f *wire.PathResponseFrame
 	}
 }
 
-func (pm *pathManagerOutgoing) ShouldSwitchPath() (*Transport, bool) {
+func (pm *pathManagerOutgoing) ShouldSwitchPath() (net.Addr, *Transport, bool) {
 	pm.mx.Lock()
 	defer pm.mx.Unlock()
 
 	if pm.pathToSwitchTo == nil {
-		return nil, false
+		return nil, nil, false
 	}
 	p := pm.pathToSwitchTo
 	pm.pathToSwitchTo = nil
-	return p.tr, true
+	return p.remoteAddr, p.tr, true
 }
 
 type pathManagerOutgoingAckHandler pathManagerOutgoing

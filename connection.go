@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"reflect"
 	"slices"
 	"sync"
@@ -223,6 +224,13 @@ type Conn struct {
 	logID  string
 	tracer *logging.ConnectionTracer
 	logger utils.Logger
+
+	preferredAddress struct {
+		sync.Mutex
+		IPv4, IPv6 netip.AddrPort
+
+		onNewPreferredAddress func()
+	}
 }
 
 var _ streamSender = &Conn{}
@@ -343,6 +351,18 @@ var newConnection = func(
 		params.MaxDatagramFrameSize = wire.MaxDatagramSize
 	} else {
 		params.MaxDatagramFrameSize = protocol.InvalidByteCount
+	}
+	if s.config.PreferredAddress.IPv4.IsValid() || s.config.PreferredAddress.IPv6.IsValid() {
+		params.PreferredAddress = &wire.PreferredAddress{
+			IPv4: s.config.PreferredAddress.IPv4,
+			IPv6: s.config.PreferredAddress.IPv6,
+		}
+		var err error
+		params.PreferredAddress, err = s.connIDGenerator.setPreferredAddressConnID(params.PreferredAddress)
+		if err != nil {
+			// TODO we may not actually be able to generate an error here.
+			s.logger.Debugf("error setting preferred address: err=%s", err)
+		}
 	}
 	if s.tracer != nil && s.tracer.SentTransportParameters != nil {
 		s.tracer.SentTransportParameters(params)
@@ -681,9 +701,9 @@ runLoop:
 		if c.perspective == protocol.PerspectiveClient {
 			pm := c.pathManagerOutgoing.Load()
 			if pm != nil {
-				tr, ok := pm.ShouldSwitchPath()
+				remote, tr, ok := pm.ShouldSwitchPath()
 				if ok {
-					c.switchToNewPath(tr, now)
+					c.switchToNewPath(remote, tr, now)
 				}
 			}
 		}
@@ -884,7 +904,7 @@ func (c *Conn) idleTimeoutStartTime() monotime.Time {
 	return startTime
 }
 
-func (c *Conn) switchToNewPath(tr *Transport, now monotime.Time) {
+func (c *Conn) switchToNewPath(remote net.Addr, tr *Transport, now monotime.Time) {
 	initialPacketSize := protocol.ByteCount(c.config.InitialPacketSize)
 	c.sentPacketHandler.MigratedPath(now, initialPacketSize)
 	maxPacketSize := protocol.ByteCount(protocol.MaxPacketBufferSize)
@@ -892,7 +912,7 @@ func (c *Conn) switchToNewPath(tr *Transport, now monotime.Time) {
 		maxPacketSize = c.peerParams.MaxUDPPayloadSize
 	}
 	c.mtuDiscoverer.Reset(now, initialPacketSize, maxPacketSize)
-	c.conn = newSendConn(tr.conn, c.conn.RemoteAddr(), packetInfo{}, utils.DefaultLogger) // TODO: find a better way
+	c.conn = newSendConn(tr.conn, remote, packetInfo{}, utils.DefaultLogger) // TODO: find a better way
 	c.sendQueue.Close()
 	c.sendQueue = newSendQueue(c.conn)
 	go func() {
@@ -2142,6 +2162,8 @@ func (c *Conn) applyTransportParameters() {
 	if params.PreferredAddress != nil {
 		// Retire the connection ID.
 		c.connIDManager.AddFromPreferredAddress(params.PreferredAddress.ConnectionID, params.PreferredAddress.StatelessResetToken)
+		c.preferredAddress.IPv4 = params.PreferredAddress.IPv4
+		c.preferredAddress.IPv6 = params.PreferredAddress.IPv6
 	}
 	maxPacketSize := protocol.ByteCount(protocol.MaxPacketBufferSize)
 	if params.MaxUDPPayloadSize > 0 && params.MaxUDPPayloadSize < maxPacketSize {
@@ -2198,16 +2220,16 @@ func (c *Conn) triggerSending(now monotime.Time) error {
 func (c *Conn) sendPackets(now monotime.Time) error {
 	if c.perspective == protocol.PerspectiveClient && c.handshakeConfirmed {
 		if pm := c.pathManagerOutgoing.Load(); pm != nil {
-			connID, frame, tr, ok := pm.NextPathToProbe()
+			connID, frame, remote, tr, ok := pm.NextPathToProbe()
 			if ok {
 				probe, buf, err := c.packer.PackPathProbePacket(connID, []ackhandler.Frame{frame}, c.version)
 				if err != nil {
 					return err
 				}
-				c.logger.Debugf("sending path probe packet from %s", c.LocalAddr())
+				c.logger.Debugf("sending path probe packet from %s to %s", tr.conn.LocalAddr(), remote)
 				c.logShortHeaderPacket(probe.DestConnID, probe.Ack, probe.Frames, probe.StreamFrames, probe.PacketNumber, probe.PacketNumberLen, probe.KeyPhase, protocol.ECNNon, buf.Len(), false)
 				c.registerPackedShortHeaderPacket(probe, protocol.ECNNon, now)
-				tr.WriteTo(buf.Data, c.conn.RemoteAddr())
+				tr.WriteTo(buf.Data, remote)
 				// There's (likely) more data to send. Loop around again.
 				c.scheduleSending()
 				return nil
@@ -2774,7 +2796,34 @@ func (c *Conn) getPathManager() *pathManagerOutgoing {
 	return c.pathManagerOutgoing.Load()
 }
 
+func (c *Conn) PreferredAddress() (v4 netip.AddrPort, v6 netip.AddrPort, err error) {
+	if c.perspective == protocol.PerspectiveServer {
+		err = errors.New("only client can query the server preferred address")
+		return
+	}
+	c.preferredAddress.Lock()
+	defer c.preferredAddress.Unlock()
+	return c.preferredAddress.IPv4, c.preferredAddress.IPv6, nil
+}
+
 func (c *Conn) AddPath(t *Transport) (*Path, error) {
+	return c.addPath(t, c.conn.RemoteAddr())
+}
+
+// AddPathWithRemote allows the client to initiate a connection migration the
+// server's preferred address. Only values equal to the received Server
+// Preferred Address are valid for remote.
+func (c *Conn) AddPathWithRemote(t *Transport, remote netip.AddrPort) (*Path, error) {
+	if c.perspective == protocol.PerspectiveServer {
+		return nil, errors.New("server cannot initiate connection migration")
+	}
+	if remote != c.preferredAddress.IPv4 && remote != c.preferredAddress.IPv6 {
+		return nil, errors.New("remote address does not match server preferred address")
+	}
+	return c.addPath(t, net.UDPAddrFromAddrPort(remote))
+}
+
+func (c *Conn) addPath(t *Transport, remote net.Addr) (*Path, error) {
 	if c.perspective == protocol.PerspectiveServer {
 		return nil, errors.New("server cannot initiate connection migration")
 	}
@@ -2787,6 +2836,7 @@ func (c *Conn) AddPath(t *Transport) (*Path, error) {
 	return c.getPathManager().NewPath(
 		t,
 		200*time.Millisecond, // initial RTT estimate
+		remote,
 		func() {
 			runner := (*packetHandlerMap)(t)
 			c.connIDGenerator.AddConnRunner(

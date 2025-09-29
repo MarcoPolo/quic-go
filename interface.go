@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"net"
+	"net/netip"
 	"slices"
 	"time"
 
@@ -106,6 +107,10 @@ type ConnectionIDGenerator interface {
 	ConnectionIDLen() int
 }
 
+type ServerPreferredAddress struct {
+	IPv4, IPv6 netip.AddrPort
+}
+
 // Config contains all configuration data needed for a QUIC server or client.
 type Config struct {
 	// GetConfigForClient is called for incoming connections.
@@ -186,6 +191,8 @@ type Config struct {
 	Allow0RTT bool
 	// Enable QUIC datagram support (RFC 9221).
 	EnableDatagrams bool
+
+	PreferredAddress ServerPreferredAddress
 	// Enable QUIC Stream Resets with Partial Delivery.
 	// See https://datatracker.ietf.org/doc/html/draft-ietf-quic-reliable-stream-reset-07.
 	EnableStreamResetPartialDelivery bool

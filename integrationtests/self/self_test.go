@@ -33,6 +33,7 @@ const (
 )
 
 var (
+	PRDataSmall = GeneratePRData(1024)
 	// PRData contains dataLen bytes of pseudo-random data.
 	PRData = GeneratePRData(dataLen)
 	// PRDataLong contains dataLenLong bytes of pseudo-random data.

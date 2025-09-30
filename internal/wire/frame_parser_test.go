@@ -16,7 +16,7 @@ import (
 )
 
 func TestFrameTypeParsingReturnsNilWhenNothingToRead(t *testing.T) {
-	parser := NewFrameParser(true, true, true)
+	parser := NewFrameParser(true, true, true, true)
 	frameType, l, err := parser.ParseType(nil, protocol.Encryption1RTT)
 	require.Equal(t, io.EOF, err)
 	require.Zero(t, frameType)
@@ -24,7 +24,7 @@ func TestFrameTypeParsingReturnsNilWhenNothingToRead(t *testing.T) {
 }
 
 func TestParseLessCommonFrameReturnsEOFWhenNothingToRead(t *testing.T) {
-	parser := NewFrameParser(true, true, true)
+	parser := NewFrameParser(true, true, true, true)
 	l, f, err := parser.ParseLessCommonFrame(FrameTypeMaxStreamData, nil, protocol.Version1)
 	require.IsType(t, &qerr.TransportError{}, err)
 	require.Zero(t, l)
@@ -32,7 +32,7 @@ func TestParseLessCommonFrameReturnsEOFWhenNothingToRead(t *testing.T) {
 }
 
 func TestFrameParsingSkipsPaddingFrames(t *testing.T) {
-	parser := NewFrameParser(true, true, true)
+	parser := NewFrameParser(true, true, true, true)
 	b := []byte{0, 0} // 2 PADDING frames
 	b, err := (&PingFrame{}).Append(b, protocol.Version1)
 	require.NoError(t, err)
@@ -49,7 +49,7 @@ func TestFrameParsingSkipsPaddingFrames(t *testing.T) {
 }
 
 func TestFrameParsingHandlesPaddingAtEnd(t *testing.T) {
-	parser := NewFrameParser(true, true, true)
+	parser := NewFrameParser(true, true, true, true)
 	b := []byte{0, 0, 0}
 
 	_, l, err := parser.ParseType(b, protocol.Encryption1RTT)
@@ -58,7 +58,7 @@ func TestFrameParsingHandlesPaddingAtEnd(t *testing.T) {
 }
 
 func TestFrameParsingParsesSingleFrame(t *testing.T) {
-	parser := NewFrameParser(true, true, true)
+	parser := NewFrameParser(true, true, true, true)
 	var b []byte
 	for range 10 {
 		var err error
@@ -77,7 +77,7 @@ func TestFrameParsingParsesSingleFrame(t *testing.T) {
 }
 
 func TestFrameParserACK(t *testing.T) {
-	parser := NewFrameParser(true, true, true)
+	parser := NewFrameParser(true, true, true, true)
 	f := &AckFrame{AckRanges: []AckRange{{Smallest: 1, Largest: 0x13}}}
 	b, err := f.Append(nil, protocol.Version1)
 	require.NoError(t, err)
@@ -103,7 +103,7 @@ func TestFrameParserAckDelay(t *testing.T) {
 }
 
 func testFrameParserAckDelay(t *testing.T, encLevel protocol.EncryptionLevel) {
-	parser := NewFrameParser(true, true, true)
+	parser := NewFrameParser(true, true, true, true)
 	parser.SetAckDelayExponent(protocol.AckDelayExponent + 2)
 	f := &AckFrame{
 		AckRanges: []AckRange{{Smallest: 1, Largest: 1}},
@@ -137,7 +137,7 @@ func checkFrameUnsupported(t *testing.T, err error, expectedFrameType uint64) {
 }
 
 func TestFrameParserStreamFrames(t *testing.T) {
-	parser := NewFrameParser(true, true, true)
+	parser := NewFrameParser(true, true, true, true)
 	f := &StreamFrame{
 		StreamID: 0x42,
 		Offset:   0x1337,
@@ -160,7 +160,7 @@ func TestFrameParserStreamFrames(t *testing.T) {
 }
 
 func TestParseStreamFrameWrapsError(t *testing.T) {
-	parser := NewFrameParser(true, true, true)
+	parser := NewFrameParser(true, true, true, true)
 	f := &StreamFrame{
 		StreamID:       0x1234,
 		Offset:         0x1000,
@@ -188,7 +188,7 @@ func TestParseStreamFrameWrapsError(t *testing.T) {
 }
 
 func TestParseStreamFrameSuccess(t *testing.T) {
-	parser := NewFrameParser(true, true, true)
+	parser := NewFrameParser(true, true, true, true)
 	original := &StreamFrame{
 		StreamID:       0x1234,
 		Offset:         0x1000,
@@ -339,7 +339,7 @@ func TestFrameParserFrames(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			parser := NewFrameParser(true, true, true)
+			parser := NewFrameParser(true, true, true, true)
 			b, err := test.frame.Append(nil, protocol.Version1)
 			require.NoError(t, err)
 
@@ -469,7 +469,7 @@ func TestFrameAllowedAtEncLevel(t *testing.T) {
 					allowed = tc.allowedOneRTT
 				}
 
-				parser := NewFrameParser(true, true, true)
+				parser := NewFrameParser(true, true, true, true)
 				b, err := tc.frame.Append(nil, protocol.Version1)
 				require.NoError(t, err)
 				frameType, _, err := parser.ParseType(b, encLevel)
@@ -488,7 +488,7 @@ func TestFrameAllowedAtEncLevel(t *testing.T) {
 }
 
 func TestFrameParserDatagramFrame(t *testing.T) {
-	parser := NewFrameParser(true, true, true)
+	parser := NewFrameParser(true, true, true, true)
 	f := &DatagramFrame{
 		Data: []byte("foobar"),
 	}
@@ -512,7 +512,7 @@ func TestFrameParserDatagramFrame(t *testing.T) {
 }
 
 func TestFrameParserDatagramUnsupported(t *testing.T) {
-	parser := NewFrameParser(false, true, true)
+	parser := NewFrameParser(false, true, true, true)
 	f := &DatagramFrame{Data: []byte("foobar")}
 	b, err := f.Append(nil, protocol.Version1)
 	require.NoError(t, err)
@@ -522,7 +522,7 @@ func TestFrameParserDatagramUnsupported(t *testing.T) {
 }
 
 func TestFrameParserResetStreamAtUnsupported(t *testing.T) {
-	parser := NewFrameParser(true, false, true)
+	parser := NewFrameParser(true, false, true, true)
 	f := &ResetStreamFrame{StreamID: 0x1337, ReliableSize: 0x42, FinalSize: 0xdeadbeef}
 	b, err := f.Append(nil, protocol.Version1)
 	require.NoError(t, err)
@@ -532,7 +532,7 @@ func TestFrameParserResetStreamAtUnsupported(t *testing.T) {
 }
 
 func TestFrameParserAckFrequencyUnsupported(t *testing.T) {
-	parser := NewFrameParser(true, true, false)
+	parser := NewFrameParser(true, true, false, true)
 
 	t.Run("ACK_FREQUENCY", func(t *testing.T) {
 		f := &AckFrequencyFrame{
@@ -557,7 +557,7 @@ func TestFrameParserAckFrequencyUnsupported(t *testing.T) {
 }
 
 func TestFrameParserInvalidFrameType(t *testing.T) {
-	parser := NewFrameParser(true, true, true)
+	parser := NewFrameParser(true, true, true, true)
 
 	_, l, err := parser.ParseType(encodeVarInt(0x42), protocol.Encryption1RTT)
 
@@ -570,7 +570,7 @@ func TestFrameParserInvalidFrameType(t *testing.T) {
 }
 
 func TestFrameParsingErrorsOnInvalidFrames(t *testing.T) {
-	parser := NewFrameParser(true, true, true)
+	parser := NewFrameParser(true, true, true, true)
 	f := &MaxStreamDataFrame{
 		StreamID:          0x1337,
 		MaximumStreamData: 0xdeadbeef,
@@ -752,7 +752,7 @@ func TestFrameParserAllocs(t *testing.T) {
 
 func testFrameParserAllocs(t *testing.T, frames []Frame) float64 {
 	buf := writeFrames(t, frames...)
-	parser := NewFrameParser(true, true, true)
+	parser := NewFrameParser(true, true, true, true)
 	parser.SetAckDelayExponent(3)
 
 	return testing.AllocsPerRun(100, func() {
@@ -821,7 +821,7 @@ func benchmarkFrames(b *testing.B, frames ...Frame) {
 	b.ReportAllocs()
 
 	buf := writeFrames(b, frames...)
-	parser := NewFrameParser(true, true, true)
+	parser := NewFrameParser(true, true, true, true)
 	parser.SetAckDelayExponent(3)
 
 	for b.Loop() {

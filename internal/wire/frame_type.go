@@ -38,6 +38,8 @@ const (
 
 	FrameTypeDatagramNoLength   FrameType = 0x30
 	FrameTypeDatagramWithLength FrameType = 0x31
+
+	FrameTypeNewPreferredAddress FrameType = 0x1d5845e2
 )
 
 func (t FrameType) IsStreamFrameType() bool {

@@ -225,6 +225,8 @@ type Conn struct {
 	tracer *logging.ConnectionTracer
 	logger utils.Logger
 
+	newPreferredAddressSeqNo atomic.Uint64
+
 	preferredAddress struct {
 		sync.Mutex
 		IPv4, IPv6 netip.AddrPort
@@ -309,7 +311,9 @@ var newConnection = func(
 		s.queueControlFrame,
 		connIDGenerator,
 	)
-	s.preSetup()
+	s.preSetup(
+		false, // Only clients set this to true
+	)
 	s.rttStats.SetInitialRTT(rtt)
 	s.sentPacketHandler, s.receivedPacketHandler = ackhandler.NewAckHandler(
 		0,
@@ -437,7 +441,7 @@ var newClientConnection = func(
 		connIDGenerator,
 	)
 	s.ctx, s.ctxCancel = context.WithCancelCause(ctx)
-	s.preSetup()
+	s.preSetup(conf.EnableNewPreferredAddress)
 	s.sentPacketHandler, s.receivedPacketHandler = ackhandler.NewAckHandler(
 		initialPacketNumber,
 		protocol.ByteCount(s.config.InitialPacketSize),
@@ -470,6 +474,7 @@ var newClientConnection = func(
 		ActiveConnectionIDLimit:   protocol.MaxActiveConnectionIDs,
 		InitialSourceConnectionID: srcConnID,
 		EnableResetStreamAt:       conf.EnableStreamResetPartialDelivery,
+		NewPreferredAddress:       conf.EnableNewPreferredAddress,
 	}
 	if s.config.EnableDatagrams {
 		params.MaxDatagramFrameSize = wire.MaxDatagramSize
@@ -507,7 +512,7 @@ var newClientConnection = func(
 	return &wrappedConn{Conn: s}
 }
 
-func (c *Conn) preSetup() {
+func (c *Conn) preSetup(enableNewPreferredAddress bool) {
 	c.largestRcvdAppData = protocol.InvalidPacketNumber
 	c.initialStream = newInitialCryptoStream(c.perspective == protocol.PerspectiveClient)
 	c.handshakeStream = newCryptoStream()
@@ -517,6 +522,7 @@ func (c *Conn) preSetup() {
 		c.config.EnableDatagrams,
 		c.config.EnableStreamResetPartialDelivery,
 		false, // ACK_FREQUENCY is not supported yet
+		enableNewPreferredAddress,
 	)
 	c.rttStats = &utils.RTTStats{}
 	c.connFlowController = flowcontrol.NewConnectionFlowController(
@@ -1722,6 +1728,21 @@ func (c *Conn) handleFrame(
 		err = c.connIDGenerator.Retire(frame.SequenceNumber, destConnID, rcvTime.Add(3*c.rttStats.PTO(false)))
 	case *wire.HandshakeDoneFrame:
 		err = c.handleHandshakeDoneFrame(rcvTime)
+	case *wire.NewPreferredAddressFrame:
+		if c.perspective != protocol.PerspectiveClient {
+			err = errors.New("unexpected frame type NewPreferredAddressFrame")
+			return nil, err
+		}
+		ip4Addr, _ := netip.AddrFromSlice(frame.IP4[:])
+		ip6Addr, _ := netip.AddrFromSlice(frame.IP6[:])
+		c.preferredAddress.Lock()
+		c.preferredAddress.IPv4 = netip.AddrPortFrom(ip4Addr, frame.IP4Port)
+		c.preferredAddress.IPv6 = netip.AddrPortFrom(ip6Addr, frame.IP6Port)
+		f := c.preferredAddress.onNewPreferredAddress
+		c.preferredAddress.Unlock()
+		if f != nil {
+			f()
+		}
 	default:
 		err = fmt.Errorf("unexpected frame type: %s", reflect.ValueOf(&frame).Elem().Type().Name())
 	}
@@ -2804,6 +2825,26 @@ func (c *Conn) PreferredAddress() (v4 netip.AddrPort, v6 netip.AddrPort, err err
 	c.preferredAddress.Lock()
 	defer c.preferredAddress.Unlock()
 	return c.preferredAddress.IPv4, c.preferredAddress.IPv6, nil
+}
+
+func (c *Conn) NewPreferredAddress(v4 netip.AddrPort, v6 netip.AddrPort) error {
+	if c.perspective != protocol.PerspectiveServer {
+		return errors.New("only server can set a new preferred address")
+	}
+	if !c.peerParams.NewPreferredAddress {
+		return errors.New("client does not support a new preferred address")
+	}
+	f := &wire.NewPreferredAddressFrame{
+		SequenceNumber: c.newPreferredAddressSeqNo.Load(),
+		IP4Port:        v4.Port(),
+		IP6Port:        v6.Port(),
+	}
+	copy(f.IP4[:], v4.Addr().AsSlice())
+	copy(f.IP6[:], v6.Addr().AsSlice())
+	c.queueControlFrame(f)
+	c.newPreferredAddressSeqNo.Add(1)
+
+	return nil
 }
 
 func (c *Conn) AddPath(t *Transport) (*Path, error) {

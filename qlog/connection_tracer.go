@@ -228,6 +228,7 @@ func (t *connectionTracer) toTransportParameters(tp *wire.TransportParameters) *
 		PreferredAddress:                pa,
 		MaxDatagramFrameSize:            tp.MaxDatagramFrameSize,
 		EnableResetStreamAt:             tp.EnableResetStreamAt,
+		NewPreferredAddress:             tp.NewPreferredAddress,
 	}
 }
 

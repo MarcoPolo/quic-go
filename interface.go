@@ -193,10 +193,15 @@ type Config struct {
 	EnableDatagrams bool
 
 	PreferredAddress ServerPreferredAddress
+
 	// Enable QUIC Stream Resets with Partial Delivery.
 	// See https://datatracker.ietf.org/doc/html/draft-ietf-quic-reliable-stream-reset-07.
 	EnableStreamResetPartialDelivery bool
-	Tracer                           func(context.Context, logging.Perspective, ConnectionID) *logging.ConnectionTracer
+
+	// Enable New Preferred Address. See TODO
+	EnableNewPreferredAddress bool
+
+	Tracer func(context.Context, logging.Perspective, ConnectionID) *logging.ConnectionTracer
 }
 
 // ClientHelloInfo contains information about an incoming connection attempt.

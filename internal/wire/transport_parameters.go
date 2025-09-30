@@ -48,6 +48,9 @@ const (
 	maxDatagramFrameSizeParameterID transportParameterID = 0x20
 	// https://datatracker.ietf.org/doc/draft-ietf-quic-reliable-stream-reset/06/
 	resetStreamAtParameterID transportParameterID = 0x17f7586d2cb571
+
+	// TODO
+	newPreferredAddressParameterID transportParameterID = 0xff0969d85c
 	// https://datatracker.ietf.org/doc/draft-ietf-quic-ack-frequency/11/
 	minAckDelayParameterID transportParameterID = 0xff04de1b
 )
@@ -90,6 +93,8 @@ type TransportParameters struct {
 	MaxDatagramFrameSize protocol.ByteCount // RFC 9221
 	EnableResetStreamAt  bool               // https://datatracker.ietf.org/doc/draft-ietf-quic-reliable-stream-reset/06/
 	MinAckDelay          *time.Duration
+
+	NewPreferredAddress bool // TODO
 }
 
 // Unmarshal the transport parameters
@@ -210,6 +215,11 @@ func (p *TransportParameters) unmarshal(b []byte, sentBy protocol.Perspective, f
 				return fmt.Errorf("wrong length for reset_stream_at: %d (expected empty)", paramLen)
 			}
 			p.EnableResetStreamAt = true
+		case newPreferredAddressParameterID:
+			if paramLen != 0 {
+				return fmt.Errorf("wrong length for new_preferred_address: %d (expected empty)", paramLen)
+			}
+			p.NewPreferredAddress = true
 		default:
 			b = b[paramLen:]
 		}
@@ -455,6 +465,11 @@ func (p *TransportParameters) Marshal(pers protocol.Perspective) []byte {
 		b = quicvarint.Append(b, uint64(resetStreamAtParameterID))
 		b = quicvarint.Append(b, 0)
 	}
+
+	if p.NewPreferredAddress && pers == protocol.PerspectiveClient {
+		b = quicvarint.Append(b, uint64(newPreferredAddressParameterID))
+		b = quicvarint.Append(b, 0)
+	}
 	if p.MinAckDelay != nil {
 		b = p.marshalVarintParam(b, minAckDelayParameterID, uint64(*p.MinAckDelay/time.Microsecond))
 	}
@@ -574,6 +589,8 @@ func (p *TransportParameters) String() string {
 	}
 	logString += ", EnableResetStreamAt: %t"
 	logParams = append(logParams, p.EnableResetStreamAt)
+	logString += ", NewPreferredAddress: %t"
+	logParams = append(logParams, p.NewPreferredAddress)
 	if p.MinAckDelay != nil {
 		logString += ", MinAckDelay: %s"
 		logParams = append(logParams, *p.MinAckDelay)

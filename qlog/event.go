@@ -419,6 +419,7 @@ type eventTransportParameters struct {
 
 	MaxDatagramFrameSize protocol.ByteCount
 	EnableResetStreamAt  bool
+	NewPreferredAddress  bool
 }
 
 func (e eventTransportParameters) Name() string {

@@ -2180,7 +2180,7 @@ func (c *Conn) triggerSending(now monotime.Time) error {
 		if deadline.IsZero() {
 			deadline = deadlineSendImmediately
 		}
-		c.pacingDeadline = deadline
+		c.pacingDeadline = deadline + 1
 		// Allow sending of an ACK if we're pacing limit.
 		// This makes sure that a peer that is mostly receiving data (and thus has an inaccurate cwnd estimate)
 		// sends enough ACKs to allow its peer to utilize the bandwidth.
